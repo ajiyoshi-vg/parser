@@ -1,18 +1,18 @@
-pub struct Source<T = char> {
-    s: Vec<T>,
+pub struct Source {
+    s: Vec<char>,
     pos: usize,
 }
 
-pub fn source(s: &str) -> Source<char> {
+pub fn source(s: &str) -> Source {
     Source::from(s.to_string().chars().collect())
 }
 
-impl<T: Clone> Source<T> {
-    pub fn from(s: Vec<T>) -> Self {
+impl Source {
+    pub fn from(s: Vec<char>) -> Self {
         Source { s, pos: 0 }
     }
 
-    pub fn peek(&self) -> Option<T> {
+    pub fn peek(&self) -> Option<char> {
         self.s.get(self.pos).cloned()
     }
 
@@ -20,7 +20,7 @@ impl<T: Clone> Source<T> {
         self.pos += 1;
     }
 
-    pub fn pop(&mut self) -> Option<T> {
+    pub fn pop(&mut self) -> Option<char> {
         self.peek().and_then(|ret| {
             self.ahead();
             Some(ret)
