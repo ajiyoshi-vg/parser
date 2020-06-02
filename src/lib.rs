@@ -21,9 +21,10 @@ impl<T: Clone> Source<T> {
     }
 
     pub fn pop(&mut self) -> Option<T> {
-        let ret = self.peek();
-        self.ahead();
-        ret
+        self.peek().and_then(|ret| {
+            self.ahead();
+            Some(ret)
+        })
     }
 
     pub fn save(&self) -> usize {
@@ -469,13 +470,18 @@ mod tests {
             assert_eq!(
                 expr()
                     .parse(&mut source(c.src.as_str()))
-                    .map(|x| eval(x))
+                    .map(|x| x.eval())
                     .expect(c.name.as_str()),
                 c.expect
             )
         }
 
-        let cases = vec!["+", "1+"];
+        let cases = vec![
+            "+",
+            "1+",
+            "a+b",
+            "1+(2+3",
+        ];
         for c in cases {
             let mut s = source(c);
             let _ = expr().parse(&mut s);
@@ -488,6 +494,27 @@ mod tests {
     enum Expr {
         Const(i32),
         BinOp(Op, Box<Expr>, Box<Expr>),
+        Zero,
+        One,
+    }
+
+    impl Expr {
+        fn bin(op: Op, lhs: Expr, rhs: Expr) -> Self {
+            Expr::BinOp(op, Box::new(lhs), Box::new(rhs))
+        }
+        fn eval(&self) -> i32 {
+            match &self {
+                Expr::Zero => 0,
+                Expr::One => 1,
+                Expr::Const(n) => n.clone(),
+                Expr::BinOp(op, a, b) => match op {
+                    Op::Add => a.eval() + b.eval(),
+                    Op::Sub => a.eval() - b.eval(),
+                    Op::Mul => a.eval() * b.eval(),
+                    Op::Div => a.eval() / b.eval(),
+                },
+            }
+        }
     }
 
     #[derive(Debug, PartialEq)]
@@ -498,32 +525,18 @@ mod tests {
         Div,
     }
 
-    fn eval(exp: Expr) -> i32 {
-        match exp {
-            Expr::Const(n) => n,
-            Expr::BinOp(op, a, b) => match op {
-                Op::Add => eval(*a) + eval(*b),
-                Op::Sub => eval(*a) - eval(*b),
-                Op::Mul => eval(*a) * eval(*b),
-                Op::Div => eval(*a) / eval(*b),
-            },
-        }
-    }
-
-    fn cons_bin_op(acc: Expr, x: (Op, Expr)) -> Expr {
-        Expr::BinOp(x.0, Box::new(acc), Box::new(x.1))
-    }
-
     fn expr() -> Parser<Expr> {
         // term ( [+|-] term )*
         // 2 + 3 * 4
-        apply(term(), |x| (Op::Add, x))
+        apply(term(), |x| (Op::Add, x)) // (Op, Expr) を作る
             .then(many(or(
-                apply(char1('+').next(term()), |x| (Op::Add, x)),
-                apply(char1('-').next(term()), |x| (Op::Sub, x)),
-            )))
+                apply(char1('+').next(term()), |x| (Op::Add, x)), // (Op, Expr) を作る
+                apply(char1('-').next(term()), |x| (Op::Sub, x)), // (Op, Expr) を作る
+            ))) // Vec<(Op, Expr)> ができる
             .apply(|ts| {
-                ts.into_iter().fold(Expr::Const(0), cons_bin_op)
+                //構文木を作る
+                // "1+2-3" はS式で書くと (- (+ (+ 1 0) 2) 3)  のような構文木になる
+                ts.into_iter().fold(Expr::Zero, |acc, t| Expr::bin(t.0, acc, t.1))
             })
     }
 
@@ -537,13 +550,15 @@ mod tests {
                 apply(char1('/').next(factor()), |x| (Op::Div, x)),
             )))
             .apply(|ts| {
-                ts.into_iter().fold(Expr::Const(1), cons_bin_op)
+                //構文木を作る
+                // "2*3/4" はS式で書くと (/ (* (* 2 1) 3) 4)  のような構文木になる
+                ts.into_iter().fold(Expr::One, |acc, t| Expr::bin(t.0, acc, t.1))
             })
     }
 
     fn factor() -> Parser<Expr> {
-        // number | '(' expr ')'
         let expr = lazy(|| expr());
+        // number | '(' expr ')'
         spaces()
             .next(or(char1('(').next(expr).prev(char1(')')), num_expr()))
             .prev(spaces())
