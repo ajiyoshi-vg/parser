@@ -1,5 +1,7 @@
 #[cfg(test)]
-use super::*;
+use super::combinator::*;
+use super::source::{source, Source};
+use super::parser::{Parser, ParseError};
 
 #[test]
 fn test_source() {
