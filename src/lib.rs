@@ -510,35 +510,39 @@ mod tests {
         }
     }
 
+    fn cons_bin_op(acc: Expr, x: (Op, Expr)) -> Expr {
+        Expr::BinOp(x.0, Box::new(acc), Box::new(x.1))
+    }
+
     fn expr() -> Parser<Expr> {
-        // 1+2+3
-        // number ( [+|-] number )*
+        // term ( [+|-] term )*
+        // 2 + 3 * 4
         apply(term(), |x| (Op::Add, x))
             .then(many(or(
                 apply(char1('+').next(term()), |x| (Op::Add, x)),
                 apply(char1('-').next(term()), |x| (Op::Sub, x)),
             )))
             .apply(|ts| {
-                ts.into_iter().fold(Expr::Const(0), |acc, t| {
-                    Expr::BinOp(t.0, Box::new(acc), Box::new(t.1))
-                })
+                ts.into_iter().fold(Expr::Const(0), cons_bin_op)
             })
     }
 
     fn term() -> Parser<Expr> {
+        // factor { [*|/] facter }*
+        // 1 * 2
+        // 2 * ( 3 + 4 )
         apply(factor(), |x| (Op::Mul, x))
             .then(many(or(
                 apply(char1('*').next(factor()), |x| (Op::Mul, x)),
                 apply(char1('/').next(factor()), |x| (Op::Div, x)),
             )))
             .apply(|ts| {
-                ts.into_iter().fold(Expr::Const(1), |acc, t| {
-                    Expr::BinOp(t.0, Box::new(acc), Box::new(t.1))
-                })
+                ts.into_iter().fold(Expr::Const(1), cons_bin_op)
             })
     }
 
     fn factor() -> Parser<Expr> {
+        // number | '(' expr ')'
         let expr = lazy(|| expr());
         spaces()
             .next(or(char1('(').next(expr).prev(char1(')')), num_expr()))
