@@ -1,4 +1,4 @@
-use super::parser::{parser, Parser, ParseError};
+use super::parser::{parser, ParseError, Parser};
 
 pub fn lazy<T, F>(f: F) -> Parser<T>
 where
@@ -8,7 +8,10 @@ where
     parser(move |s| f().parse(s))
 }
 
-pub fn many<T: 'static>(p: Parser<T>) -> Parser<Vec<T>> {
+pub fn many<T>(p: Parser<T>) -> Parser<Vec<T>>
+where
+    T: 'static
+{
     parser(move |s| {
         let mut ret = Vec::new();
         while let Ok(x) = p.parse(s) {
@@ -18,7 +21,10 @@ pub fn many<T: 'static>(p: Parser<T>) -> Parser<Vec<T>> {
     })
 }
 
-pub fn many1<T: 'static>(p: Parser<T>) -> Parser<Vec<T>> {
+pub fn many1<T>(p: Parser<T>) -> Parser<Vec<T>>
+where
+    T: 'static
+{
     parser(move |s| {
         let mut ret = vec![p.parse(s)?];
         while let Ok(x) = p.parse(s) {
@@ -28,7 +34,10 @@ pub fn many1<T: 'static>(p: Parser<T>) -> Parser<Vec<T>> {
     })
 }
 
-pub fn repeat<T: 'static>(n: usize, p: Parser<T>) -> Parser<Vec<T>> {
+pub fn repeat<T>(n: usize, p: Parser<T>) -> Parser<Vec<T>>
+where
+    T: 'static,
+{
     parser(move |s| {
         let mut ret = Vec::with_capacity(n);
         for _ in 0..n {
@@ -39,12 +48,32 @@ pub fn repeat<T: 'static>(n: usize, p: Parser<T>) -> Parser<Vec<T>> {
     .tryp()
 }
 
-pub fn or<T: 'static>(a: Parser<T>, b: Parser<T>) -> Parser<T> {
+pub fn sequence<T>(ps: Vec<Parser<T>>) -> Parser<Vec<T>>
+where
+    T: 'static,
+{
+    parser(move |s| {
+        let mut tmp = Vec::with_capacity(ps.len());
+        for p in ps.iter() {
+            tmp.push(p.parse(s)?);
+        }
+        Ok(tmp)
+    })
+    .tryp()
+}
+
+pub fn or<T>(a: Parser<T>, b: Parser<T>) -> Parser<T>
+where
+    T: 'static,
+{
     let a = a.tryp();
     parser(move |s| a.parse(s).or_else(|_| b.parse(s)))
 }
 
-pub fn tryp<T: 'static>(p: Parser<T>) -> Parser<T> {
+pub fn tryp<T>(p: Parser<T>) -> Parser<T>
+where
+    T: 'static,
+{
     parser(move |s| {
         let save = s.save();
         p.parse(s).or_else(|e| {
@@ -54,11 +83,19 @@ pub fn tryp<T: 'static>(p: Parser<T>) -> Parser<T> {
     })
 }
 
-pub fn next<A: 'static, B: 'static>(a: Parser<A>, b: Parser<B>) -> Parser<B> {
+pub fn next<A, B>(a: Parser<A>, b: Parser<B>) -> Parser<B>
+where
+    A: 'static,
+    B: 'static,
+{
     parser(move |s| a.parse(s).and_then(|_| b.parse(s))).tryp()
 }
 
-pub fn prev<A: 'static, B: 'static>(a: Parser<A>, b: Parser<B>) -> Parser<A> {
+pub fn prev<A, B>(a: Parser<A>, b: Parser<B>) -> Parser<A>
+where
+    A: 'static,
+    B: 'static,
+{
     parser(move |s| a.parse(s).and_then(|ret| b.parse(s).and_then(|_| Ok(ret)))).tryp()
 }
 
@@ -79,7 +116,10 @@ where
     parser(move |s| p.parse(s).and_then(|x| f(x))).tryp()
 }
 
-pub fn then<T: 'static>(head: Parser<T>, tail: Parser<Vec<T>>) -> Parser<Vec<T>> {
+pub fn then<T>(head: Parser<T>, tail: Parser<Vec<T>>) -> Parser<Vec<T>>
+where
+    T: 'static,
+{
     parser(move |s| {
         let mut ret = vec![head.parse(s)?];
         tail.parse(s).map(|xs| {
@@ -120,20 +160,6 @@ where
     T: std::str::FromStr + 'static,
 {
     apply_option(number(), |x| x.parse().map_err(|_| ParseError::Unknown))
-}
-
-pub fn sequence<T>(ps: Vec<Parser<T>>) -> Parser<Vec<T>>
-where
-    T: 'static,
-{
-    parser(move |s| {
-        let mut tmp = Vec::new();
-        for p in ps.iter() {
-            tmp.push(p.parse(s)?);
-        }
-        Ok(tmp)
-    })
-    .tryp()
 }
 
 pub fn string(st: &str) -> Parser<String> {
