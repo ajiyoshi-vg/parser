@@ -547,8 +547,8 @@ mod tests {
 
     fn num_expr() -> Parser<Expr> {
         or(
-            int().apply(|n| Expr::Const(n)),
-            char1('-').next(int()).apply(|n: i32| Expr::Const(-n)),
+            apply(int(), |n| Expr::Const(n)),
+            apply(char1('-').next(int()), |n: i32| Expr::Const(-n)),
         )
     }
 }
