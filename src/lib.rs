@@ -194,11 +194,9 @@ impl<T> Parser<T> {
     }
 }
 
-impl Iterator for Source {
-    type Item = char;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.pop()
+impl ToString for Source {
+    fn to_string(&self) -> String {
+        self.s.as_slice()[self.pos..].iter().collect()
     }
 }
 
@@ -270,11 +268,16 @@ mod tests {
     #[test]
     fn test_source() {
         let mut s = source("abc");
-        assert_eq!(s.next(), Some('a'));
-        assert_eq!(s.next(), Some('b'));
-        assert_eq!(s.next(), Some('c'));
-        assert_eq!(s.next(), None);
-        assert_eq!(s.next(), None);
+        assert_eq!(s.to_string(), "abc".to_string());
+        assert_eq!(s.pop(), Some('a'));
+        assert_eq!(s.to_string(), "bc".to_string());
+        assert_eq!(s.pop(), Some('b'));
+        assert_eq!(s.to_string(), "c".to_string());
+        assert_eq!(s.pop(), Some('c'));
+        assert_eq!(s.to_string(), "".to_string());
+        assert_eq!(s.pop(), None);
+        assert!(s.is_finished());
+        assert_eq!(s.to_string(), "".to_string());
     }
 
     #[test]
@@ -291,178 +294,283 @@ mod tests {
     fn test_char1() {
         let mut s = source("xyz");
         let is_x = char1('x');
-        let any_char = any_char();
         assert_eq!(is_x.parse(&mut s).unwrap(), 'x');
         assert!(is_x.parse(&mut s).is_err());
-        assert_eq!(any_char.parse(&mut s).unwrap(), 'y');
-        assert_eq!(any_char.parse(&mut s).unwrap(), 'z');
-        assert!(any_char.parse(&mut s).is_err());
+        assert_eq!(s.to_string(), "yz".to_string());
+    }
+
+    struct Case<T> {
+        parser: Parser<T>,
+        source: Source,
+        expect: Result<T, ParseError>,
+        source_after: String,
     }
 
     #[test]
     fn test_many() {
-        let mut s = source("123x");
-        assert_eq!(many(digit()).parse(&mut s).unwrap(), vec!['1', '2', '3']);
-        assert_eq!(any_char().parse(&mut s).unwrap(), 'x');
+        let cs = vec![
+            Case {
+                parser: many(digit()),
+                source: source("123x"),
+                expect: Ok(vec!['1', '2', '3']),
+                source_after: "x".to_string(),
+            },
+            Case {
+                parser: digit().many(),
+                source: source("123x"),
+                expect: Ok(vec!['1', '2', '3']),
+                source_after: "x".to_string(),
+            },
+            Case {
+                parser: many(char1('a').or(char1('b'))),
+                source: source("abaabcab"),
+                expect: Ok(vec!['a', 'b', 'a', 'a', 'b']),
+                source_after: "cab".to_string(),
+            },
+        ];
 
-        let mut s = source("123x");
-        assert_eq!(digit().many().parse(&mut s).unwrap(), vec!['1', '2', '3']);
-        assert_eq!(any_char().parse(&mut s).unwrap(), 'x');
-
-        let p = many(char1('a').or(char1('b')));
-        let mut s = source("abaabbbbabc");
-        assert!(p.parse(&mut s).is_ok());
-        assert_eq!(p.parse(&mut s).unwrap(), vec![]);
-        assert_eq!(any_char().parse(&mut s).unwrap(), 'c');
+        for mut c in cs {
+            assert_eq!(c.parser.parse(&mut c.source), c.expect);
+            assert_eq!(c.source.to_string(), c.source_after)
+        }
     }
 
     #[test]
     fn test_repeat() {
-        let p4 = digit().repeat(4);
-        let p3 = digit().repeat(3);
-        let mut s = source("123x");
-        assert!(p4.parse(&mut s).is_err()); // repeat途中で失敗したら何も消費しない
-        assert_eq!(p3.parse(&mut s).unwrap(), vec!['1', '2', '3']);
-        assert!(p3.parse(&mut s).is_err());
+        let cs = vec![
+            Case {
+                parser: digit().repeat(4),
+                source: source("123x"),
+                expect: Err(ParseError::Unknown),
+                source_after: "123x".to_string(),
+            },
+            Case {
+                parser: digit().repeat(3),
+                source: source("123x"),
+                expect: Ok(vec!['1', '2', '3']),
+                source_after: "x".to_string(),
+            },
+            Case {
+                parser: repeat(3, digit()),
+                source: source("123x"),
+                expect: Ok(vec!['1', '2', '3']),
+                source_after: "x".to_string(),
+            },
+            Case {
+                parser: digit().repeat(0),
+                source: source("abc"),
+                expect: Ok(vec![]),
+                source_after: "abc".to_string(),
+            },
+        ];
+
+        for mut c in cs {
+            assert_eq!(c.parser.parse(&mut c.source), c.expect);
+            assert_eq!(c.source.to_string(), c.source_after)
+        }
     }
 
     #[test]
     fn test_or() {
-        let p = or(char1('a'), char1('b'));
-        let mut s = source("abc");
-        assert_eq!(p.parse(&mut s).unwrap(), 'a');
-        assert_eq!(p.parse(&mut s).unwrap(), 'b');
-        assert!(p.parse(&mut s).is_err());
-        assert!(!s.is_finished());
+        let cs = vec![
+            Case {
+                parser: or(string("ab"), string("cd")),
+                source: source("abcd"),
+                expect: Ok("ab".to_string()),
+                source_after: "cd".to_string(),
+            },
+            Case {
+                parser: or(string("ab"), string("cd")),
+                source: source("cdcd"),
+                expect: Ok("cd".to_string()),
+                source_after: "cd".to_string(),
+            },
+            Case {
+                parser: or(string("ab"), string("ac")),
+                source: source("abc"),
+                expect: Ok("ab".to_string()),
+                source_after: "c".to_string(),
+            },
+            Case {
+                parser: or(string("ab"), string("ac")),
+                source: source("acb"),
+                expect: Ok("ac".to_string()),
+                source_after: "b".to_string(),
+            },
+            Case {
+                parser: string("ab").or(string("ac")),
+                source: source("acb"),
+                expect: Ok("ac".to_string()),
+                source_after: "b".to_string(),
+            },
+        ];
 
-        let p = char1('a').or(char1('b'));
-        let mut s = source("abc");
-        assert_eq!(p.parse(&mut s).unwrap(), 'a');
-        assert_eq!(p.parse(&mut s).unwrap(), 'b');
-        assert!(p.parse(&mut s).is_err());
-        assert!(!s.is_finished());
-    }
-
-    #[test]
-    fn test_string() {
-        let mut s = source("if cond then 1 else 2");
-        assert!(string("if cond {").parse(&mut s).is_err());
-        assert_eq!(
-            string("if cond ").parse(&mut s).unwrap(),
-            "if cond ".to_string()
-        );
-        assert_eq!(string("then").parse(&mut s).unwrap(), "then".to_string());
+        for mut c in cs {
+            assert_eq!(c.parser.parse(&mut c.source), c.expect);
+            assert_eq!(c.source.to_string(), c.source_after)
+        }
     }
 
     #[test]
     fn test_number() {
-        let mut s = source("123x");
-        assert_eq!(number().parse(&mut s).unwrap(), "123".to_string());
-        assert_eq!(any_char().parse(&mut s).unwrap(), 'x');
-        assert!(s.is_finished());
+        let cs = vec![
+            Case {
+                parser: number(),
+                source: source("123c"),
+                expect: Ok("123".to_string()),
+                source_after: "c".to_string(),
+            },
+            Case {
+                parser: number(),
+                source: source("abc"),
+                expect: Err(ParseError::Unknown),
+                source_after: "abc".to_string(),
+            },
+        ];
+        for mut c in cs {
+            assert_eq!(c.parser.parse(&mut c.source), c.expect);
+            assert_eq!(c.source.to_string(), c.source_after)
+        }
+    }
 
-        let mut s = source("123x");
-        assert_eq!(int::<i32>().parse(&mut s).unwrap(), 123);
-        assert_eq!(any_char().parse(&mut s).unwrap(), 'x');
-        assert!(s.is_finished());
-
-        let mut s = source("abc");
-        assert!(number().parse(&mut s).is_err());
-        assert!(string("abc").parse(&mut s).is_ok()); // ↑のパース失敗で何も消費されない
-
-        let mut s = source("abc");
-        assert!(int::<i32>().parse(&mut s).is_err());
-        assert!(string("abc").parse(&mut s).is_ok()); // ↑のパース失敗で何も消費されない
+    #[test]
+    fn test_int() {
+        let cs = vec![
+            Case {
+                parser: int(),
+                source: source("123c"),
+                expect: Ok(123),
+                source_after: "c".to_string(),
+            },
+            Case {
+                parser: int(),
+                source: source("abc"),
+                expect: Err(ParseError::Unknown),
+                source_after: "abc".to_string(),
+            },
+        ];
+        for mut c in cs {
+            assert_eq!(c.parser.parse(&mut c.source), c.expect);
+            assert_eq!(c.source.to_string(), c.source_after)
+        }
     }
 
     #[test]
     fn test_next_prev() {
-        let p = char1('+').next(number());
-        let mut s = source("+123");
-        assert_eq!(p.parse(&mut s).unwrap(), "123".to_string());
-        assert!(s.is_finished());
-        assert!(p.parse(&mut source("123")).is_err());
-        assert!(p.parse(&mut source("+")).is_err());
-
-        let p = number().prev(char1(','));
-        let mut s = source("123,");
-        assert_eq!(p.parse(&mut s).unwrap(), "123".to_string());
-        assert!(s.is_finished());
-        assert!(p.parse(&mut source("123")).is_err());
-
-        let p = char1('+').next(number()).prev(char1(','));
-        let mut s = source("+123,");
-        assert_eq!(p.parse(&mut s).unwrap(), "123".to_string());
-        assert!(s.is_finished());
-        assert!(p.parse(&mut source("+123")).is_err());
-        assert!(p.parse(&mut source("123,")).is_err());
-
-        let p = char1('+').next(int::<i32>()).prev(char1(','));
-        let mut s = source("+123,");
-        assert_eq!(p.parse(&mut s).unwrap(), 123);
-        assert!(s.is_finished());
-        assert!(p.parse(&mut source("+123")).is_err());
-        assert!(p.parse(&mut source("123,")).is_err());
+        let cs = vec![
+            Case {
+                parser: char1('+').next(number()),
+                source: source("+123c"),
+                expect: Ok("123".to_string()),
+                source_after: "c".to_string(),
+            },
+            Case {
+                parser: char1('+').next(number()),
+                source: source("+c"),
+                expect: Err(ParseError::Unknown),
+                source_after: "+c".to_string(),
+            },
+            Case {
+                parser: char1('+').next(number()),
+                source: source("123"),
+                expect: Err(ParseError::Unknown),
+                source_after: "123".to_string(),
+            },
+            Case {
+                parser: number().prev(char1(',')),
+                source: source("42,"),
+                expect: Ok("42".to_string()),
+                source_after: "".to_string(),
+            },
+            Case {
+                parser: number().prev(char1(',')),
+                source: source("42"),
+                expect: Err(ParseError::Unknown),
+                source_after: "42".to_string(),
+            },
+            Case {
+                parser: char1('(').next(number()).prev(char1(')')),
+                source: source("(42)"),
+                expect: Ok("42".to_string()),
+                source_after: "".to_string(),
+            },
+            Case {
+                parser: char1('(').next(number()).prev(char1(')')),
+                source: source("(42"),
+                expect: Err(ParseError::Unknown),
+                source_after: "(42".to_string(),
+            },
+            Case {
+                parser: char1('(').next(number()).prev(char1(')')),
+                source: source("()"),
+                expect: Err(ParseError::Unknown),
+                source_after: "()".to_string(),
+            },
+        ];
+        for mut c in cs {
+            assert_eq!(c.parser.parse(&mut c.source), c.expect);
+            assert_eq!(c.source.to_string(), c.source_after)
+        }
     }
 
     #[test]
     fn test_expr() {
         struct Case {
             name: String,
-            src: String,
+            src: Source,
             expect: i32,
         }
         let cases = vec![
             Case {
                 name: "simple".to_string(),
-                src: "1+2+3".to_string(),
+                src: source("1+2+3"),
                 expect: 6,
             },
             Case {
                 name: "with ()".to_string(),
-                src: "1-(2+3)".to_string(),
+                src: source("1-(2+3)"),
                 expect: -4,
             },
             Case {
                 name: "mul".to_string(),
-                src: "2*(2+3)".to_string(),
+                src: source("2*(2+3)"),
                 expect: 10,
             },
             Case {
                 name: "unary minus".to_string(),
-                src: "-2*(-1+3)".to_string(),
+                src: source("-2*(-1+3)"),
                 expect: -4,
             },
             Case {
                 name: "unary minus".to_string(),
-                src: "-2*(-1+3)".to_string(),
+                src: source("-2*(-1+3)"),
                 expect: -4,
             },
             Case {
                 name: "spaces".to_string(),
-                src: "2 + 3 * 4".to_string(),
+                src: source("2 + 3 * 4"),
                 expect: 14,
             },
             Case {
                 name: "minus".to_string(),
-                src: "2 - 3 * 4".to_string(),
+                src: source("2 - 3 * 4"),
                 expect: -10,
             },
             Case {
                 name: "div".to_string(),
-                src: "100 / 10/2".to_string(),
+                src: source("100 / 10/2"),
                 expect: 5,
             },
             Case {
                 name: "div+paren".to_string(),
-                src: "100 / (10 / 2)".to_string(),
+                src: source("100 / (10 / 2)"),
                 expect: 20,
             },
         ];
-        for c in cases {
+        for mut c in cases {
             assert_eq!(
                 expr()
-                    .parse(&mut source(c.src.as_str()))
+                    .parse(&mut c.src)
                     .map(|x| x.eval())
                     .expect(c.name.as_str()),
                 c.expect
