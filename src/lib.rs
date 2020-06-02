@@ -9,11 +9,11 @@ pub fn source(s: &str) -> Source<char> {
 
 impl<T: Clone> Source<T> {
     pub fn from(s: Vec<T>) -> Self {
-        Source { s: s, pos: 0 }
+        Source { s, pos: 0 }
     }
 
     pub fn peek(&self) -> Option<T> {
-        self.s.get(self.pos).map(|x| x.clone())
+        self.s.get(self.pos).cloned()
     }
 
     pub fn ahead(&mut self) {
@@ -39,14 +39,19 @@ impl<T: Clone> Source<T> {
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub enum ParseError {
+    Unknown,
+}
+
 pub struct Parser<T> {
-    body: Box<dyn Fn(&mut Source) -> Option<T>>,
+    body: Box<dyn Fn(&mut Source) -> Result<T, ParseError>>,
 }
 
 impl<T: 'static> Parser<T> {
     pub fn new<F>(f: F) -> Self
     where
-        F: Fn(&mut Source) -> Option<T> + 'static,
+        F: Fn(&mut Source) -> Result<T, ParseError> + 'static,
     {
         Parser { body: Box::new(f) }
     }
@@ -93,7 +98,7 @@ where
 pub fn parser<T, F>(f: F) -> Parser<T>
 where
     T: 'static,
-    F: Fn(&mut Source) -> Option<T> + 'static,
+    F: Fn(&mut Source) -> Result<T, ParseError> + 'static,
 {
     Parser::new(f)
 }
@@ -101,24 +106,20 @@ where
 pub fn many<T: 'static>(p: Parser<T>) -> Parser<Vec<T>> {
     parser(move |s| {
         let mut ret = Vec::new();
-        while let Some(x) = p.parse(s) {
+        while let Ok(x) = p.parse(s) {
             ret.push(x);
         }
-        Some(ret)
+        Ok(ret)
     })
 }
 
 pub fn many1<T: 'static>(p: Parser<T>) -> Parser<Vec<T>> {
     parser(move |s| {
-        let mut ret = match p.parse(s) {
-            Some(x) => vec![x],
-            None => return None,
-        };
-
-        while let Some(x) = p.parse(s) {
+        let mut ret = vec![p.parse(s)?];
+        while let Ok(x) = p.parse(s) {
             ret.push(x);
         }
-        Some(ret)
+        Ok(ret)
     })
 }
 
@@ -126,27 +127,24 @@ pub fn repeat<T: 'static>(n: usize, p: Parser<T>) -> Parser<Vec<T>> {
     parser(move |s| {
         let mut ret = Vec::with_capacity(n);
         for _ in 0..n {
-            match p.parse(s) {
-                Some(x) => ret.push(x),
-                None => return None,
-            }
+            ret.push(p.parse(s)?);
         }
-        Some(ret)
+        Ok(ret)
     })
     .tryp()
 }
 
 pub fn or<T: 'static>(a: Parser<T>, b: Parser<T>) -> Parser<T> {
     let a = a.tryp();
-    parser(move |s| a.parse(s).or_else(|| b.parse(s)))
+    parser(move |s| a.parse(s).or_else(|_| b.parse(s)))
 }
 
 pub fn tryp<T: 'static>(p: Parser<T>) -> Parser<T> {
     parser(move |s| {
         let save = s.save();
-        p.parse(s).or_else(|| {
+        p.parse(s).or_else(|e| {
             s.restore(save);
-            None
+            Err(e)
         })
     })
 }
@@ -156,11 +154,7 @@ pub fn next<A: 'static, B: 'static>(a: Parser<A>, b: Parser<B>) -> Parser<B> {
 }
 
 pub fn prev<A: 'static, B: 'static>(a: Parser<A>, b: Parser<B>) -> Parser<A> {
-    parser(move |s| {
-        a.parse(s)
-            .and_then(|ret| b.parse(s).and_then(|_| Some(ret)))
-    })
-    .tryp()
+    parser(move |s| a.parse(s).and_then(|ret| b.parse(s).and_then(|_| Ok(ret)))).tryp()
 }
 
 pub fn apply<A, B, F>(p: Parser<A>, f: F) -> Parser<B>
@@ -175,18 +169,14 @@ pub fn apply_option<A, B, F>(p: Parser<A>, f: F) -> Parser<B>
 where
     A: 'static,
     B: 'static,
-    F: Fn(A) -> Option<B> + 'static,
+    F: Fn(A) -> Result<B, ParseError> + 'static,
 {
     parser(move |s| p.parse(s).and_then(|x| f(x))).tryp()
 }
 
 pub fn then<T: 'static>(head: Parser<T>, tail: Parser<Vec<T>>) -> Parser<Vec<T>> {
     parser(move |s| {
-        let mut ret = match head.parse(s) {
-            Some(x) => vec![x],
-            None => return None,
-        };
-
+        let mut ret = vec![head.parse(s)?];
         tail.parse(s).map(|xs| {
             for x in xs {
                 ret.push(x);
@@ -198,7 +188,7 @@ pub fn then<T: 'static>(head: Parser<T>, tail: Parser<Vec<T>>) -> Parser<Vec<T>>
 }
 
 impl<T> Parser<T> {
-    pub fn parse(&self, s: &mut Source) -> Option<T> {
+    pub fn parse(&self, s: &mut Source) -> Result<T, ParseError> {
         (self.body)(s)
     }
 }
@@ -213,22 +203,15 @@ impl Iterator for Source {
 
 pub fn satisfy<F>(f: F) -> Parser<char>
 where
-    F: Fn(char) -> bool + 'static,
+    F: Fn(&char) -> bool + 'static,
 {
-    /*
-    parser(move |s| s.pop().filter(|x| f(x.to_owned())))
-        .tryp()
-    と等価だと思うけどベタにやった方が速い気がするので
-    */
-    parser(move |s| match s.peek() {
-        Some(c) => {
-            if f(c) {
-                s.pop()
-            } else {
-                None
-            }
-        }
-        None => None,
+    parser(move |s| {
+        s.peek()
+            .filter(|x| f(x))
+            .map_or(Err(ParseError::Unknown), |x| {
+                s.ahead();
+                Ok(x)
+            })
     })
 }
 
@@ -237,7 +220,7 @@ pub fn any_char() -> Parser<char> {
 }
 
 pub fn char1(x: char) -> Parser<char> {
-    satisfy(move |c| c == x)
+    satisfy(move |c| x.eq(c))
 }
 
 pub fn digit() -> Parser<char> {
@@ -252,14 +235,7 @@ pub fn int<T>() -> Parser<T>
 where
     T: std::str::FromStr + 'static,
 {
-    apply_option(number(), |x| maybe(x.parse()))
-}
-
-fn maybe<T, E>(x: Result<T, E>) -> Option<T> {
-    match x {
-        Ok(ret) => Some(ret),
-        Err(_) => None,
-    }
+    apply_option(number(), |x| x.parse().map_err(|_| ParseError::Unknown))
 }
 
 pub fn sequence<T>(ps: Vec<Parser<T>>) -> Parser<Vec<T>>
@@ -269,19 +245,16 @@ where
     parser(move |s| {
         let mut tmp = Vec::new();
         for p in ps.iter() {
-            match p.parse(s) {
-                Some(x) => tmp.push(x),
-                None => return None,
-            }
+            tmp.push(p.parse(s)?);
         }
-        Some(tmp)
+        Ok(tmp)
     })
     .tryp()
 }
 
 pub fn string(st: &str) -> Parser<String> {
     // Vec<Parser<char>> を作って
-    let ps = st.chars().map(|c| char1(c)).collect();
+    let ps = st.chars().map(char1).collect();
     // Parser<Vec<char>> にして
     sequence(ps)
         // パース結果の Vec<char> から String を作る
@@ -294,10 +267,6 @@ pub fn space() -> Parser<char> {
 
 pub fn spaces() -> Parser<Vec<char>> {
     space().many()
-}
-
-pub fn sandbox() {
-    assert!(true);
 }
 
 #[cfg(test)]
@@ -318,10 +287,10 @@ mod tests {
     fn test_parse() {
         let mut s = source("abc");
         let any_char = any_char();
-        assert_eq!(any_char.parse(&mut s), Some('a'));
-        assert_eq!(any_char.parse(&mut s), Some('b'));
-        assert_eq!(any_char.parse(&mut s), Some('c'));
-        assert_eq!(any_char.parse(&mut s), None);
+        assert_eq!(any_char.parse(&mut s).unwrap(), 'a');
+        assert_eq!(any_char.parse(&mut s).unwrap(), 'b');
+        assert_eq!(any_char.parse(&mut s).unwrap(), 'c');
+        assert!(any_char.parse(&mut s).is_err());
     }
 
     #[test]
@@ -329,28 +298,28 @@ mod tests {
         let mut s = source("xyz");
         let is_x = char1('x');
         let any_char = any_char();
-        assert_eq!(is_x.parse(&mut s), Some('x'));
-        assert_eq!(is_x.parse(&mut s), None);
-        assert_eq!(any_char.parse(&mut s), Some('y'));
-        assert_eq!(any_char.parse(&mut s), Some('z'));
-        assert_eq!(any_char.parse(&mut s), None);
+        assert_eq!(is_x.parse(&mut s).unwrap(), 'x');
+        assert!(is_x.parse(&mut s).is_err());
+        assert_eq!(any_char.parse(&mut s).unwrap(), 'y');
+        assert_eq!(any_char.parse(&mut s).unwrap(), 'z');
+        assert!(any_char.parse(&mut s).is_err());
     }
 
     #[test]
     fn test_many() {
         let mut s = source("123x");
-        assert_eq!(many(digit()).parse(&mut s), Some(vec!['1', '2', '3']));
-        assert_eq!(any_char().parse(&mut s), Some('x'));
+        assert_eq!(many(digit()).parse(&mut s).unwrap(), vec!['1', '2', '3']);
+        assert_eq!(any_char().parse(&mut s).unwrap(), 'x');
 
         let mut s = source("123x");
-        assert_eq!(digit().many().parse(&mut s), Some(vec!['1', '2', '3']));
-        assert_eq!(any_char().parse(&mut s), Some('x'));
+        assert_eq!(digit().many().parse(&mut s).unwrap(), vec!['1', '2', '3']);
+        assert_eq!(any_char().parse(&mut s).unwrap(), 'x');
 
         let p = many(char1('a').or(char1('b')));
         let mut s = source("abaabbbbabc");
-        assert!(p.parse(&mut s).is_some());
-        assert_eq!(p.parse(&mut s), Some(vec![]));
-        assert_eq!(any_char().parse(&mut s), Some('c'));
+        assert!(p.parse(&mut s).is_ok());
+        assert_eq!(p.parse(&mut s).unwrap(), vec![]);
+        assert_eq!(any_char().parse(&mut s).unwrap(), 'c');
     }
 
     #[test]
@@ -358,121 +327,164 @@ mod tests {
         let p4 = digit().repeat(4);
         let p3 = digit().repeat(3);
         let mut s = source("123x");
-        assert_eq!(p4.parse(&mut s), None); // repeat途中で失敗したら何も消費しない
-        assert_eq!(p3.parse(&mut s), Some(vec!['1', '2', '3']));
-        assert_eq!(p3.parse(&mut s), None);
+        assert!(p4.parse(&mut s).is_err()); // repeat途中で失敗したら何も消費しない
+        assert_eq!(p3.parse(&mut s).unwrap(), vec!['1', '2', '3']);
+        assert!(p3.parse(&mut s).is_err());
     }
 
     #[test]
     fn test_or() {
         let p = or(char1('a'), char1('b'));
         let mut s = source("abc");
-        assert_eq!(p.parse(&mut s), Some('a'));
-        assert_eq!(p.parse(&mut s), Some('b'));
-        assert_eq!(p.parse(&mut s), None);
+        assert_eq!(p.parse(&mut s).unwrap(), 'a');
+        assert_eq!(p.parse(&mut s).unwrap(), 'b');
+        assert!(p.parse(&mut s).is_err());
         assert!(!s.is_finished());
 
         let p = char1('a').or(char1('b'));
         let mut s = source("abc");
-        assert_eq!(p.parse(&mut s), Some('a'));
-        assert_eq!(p.parse(&mut s), Some('b'));
-        assert_eq!(p.parse(&mut s), None);
+        assert_eq!(p.parse(&mut s).unwrap(), 'a');
+        assert_eq!(p.parse(&mut s).unwrap(), 'b');
+        assert!(p.parse(&mut s).is_err());
         assert!(!s.is_finished());
     }
 
     #[test]
     fn test_string() {
         let mut s = source("if cond then 1 else 2");
-        assert_eq!(string("if cond {").parse(&mut s), None);
+        assert!(string("if cond {").parse(&mut s).is_err());
         assert_eq!(
-            string("if cond ").parse(&mut s),
-            Some("if cond ".to_string())
+            string("if cond ").parse(&mut s).unwrap(),
+            "if cond ".to_string()
         );
-        assert_eq!(string("then").parse(&mut s), Some("then".to_string()));
+        assert_eq!(string("then").parse(&mut s).unwrap(), "then".to_string());
     }
 
     #[test]
     fn test_number() {
         let mut s = source("123x");
-        assert_eq!(number().parse(&mut s), Some("123".to_string()));
-        assert_eq!(any_char().parse(&mut s), Some('x'));
+        assert_eq!(number().parse(&mut s).unwrap(), "123".to_string());
+        assert_eq!(any_char().parse(&mut s).unwrap(), 'x');
         assert!(s.is_finished());
 
         let mut s = source("123x");
-        assert_eq!(int().parse(&mut s), Some(123));
-        assert_eq!(any_char().parse(&mut s), Some('x'));
+        assert_eq!(int::<i32>().parse(&mut s).unwrap(), 123);
+        assert_eq!(any_char().parse(&mut s).unwrap(), 'x');
         assert!(s.is_finished());
 
         let mut s = source("abc");
-        assert_eq!(number().parse(&mut s), None);
-        assert!(string("abc").parse(&mut s).is_some()); // ↑のパース失敗で何も消費されない
+        assert!(number().parse(&mut s).is_err());
+        assert!(string("abc").parse(&mut s).is_ok()); // ↑のパース失敗で何も消費されない
 
         let mut s = source("abc");
-        assert_eq!(int().parse(&mut s), None as Option<i32>);
-        assert!(string("abc").parse(&mut s).is_some()); // ↑のパース失敗で何も消費されない
+        assert!(int::<i32>().parse(&mut s).is_err());
+        assert!(string("abc").parse(&mut s).is_ok()); // ↑のパース失敗で何も消費されない
     }
 
     #[test]
     fn test_next_prev() {
         let p = char1('+').next(number());
         let mut s = source("+123");
-        assert_eq!(p.parse(&mut s), Some("123".to_string()));
+        assert_eq!(p.parse(&mut s).unwrap(), "123".to_string());
         assert!(s.is_finished());
-        assert_eq!(p.parse(&mut source("123")), None);
+        assert!(p.parse(&mut source("123")).is_err());
+        assert!(p.parse(&mut source("+")).is_err());
 
         let p = number().prev(char1(','));
         let mut s = source("123,");
-        assert_eq!(p.parse(&mut s), Some("123".to_string()));
+        assert_eq!(p.parse(&mut s).unwrap(), "123".to_string());
         assert!(s.is_finished());
-        assert_eq!(p.parse(&mut source("123")), None);
+        assert!(p.parse(&mut source("123")).is_err());
 
         let p = char1('+').next(number()).prev(char1(','));
         let mut s = source("+123,");
-        assert_eq!(p.parse(&mut s), Some("123".to_string()));
+        assert_eq!(p.parse(&mut s).unwrap(), "123".to_string());
         assert!(s.is_finished());
-        assert_eq!(p.parse(&mut source("+123")), None);
-        assert_eq!(p.parse(&mut source("123,")), None);
+        assert!(p.parse(&mut source("+123")).is_err());
+        assert!(p.parse(&mut source("123,")).is_err());
 
-        let p = char1('+').next(int()).prev(char1(','));
+        let p = char1('+').next(int::<i32>()).prev(char1(','));
         let mut s = source("+123,");
-        assert_eq!(p.parse(&mut s), Some(123));
+        assert_eq!(p.parse(&mut s).unwrap(), 123);
         assert!(s.is_finished());
-        assert_eq!(p.parse(&mut source("+123")), None);
-        assert_eq!(p.parse(&mut source("123,")), None);
+        assert!(p.parse(&mut source("+123")).is_err());
+        assert!(p.parse(&mut source("123,")).is_err());
     }
 
     #[test]
     fn test_expr() {
-        let mut s = source("1+2+3");
-        assert_eq!(expr().parse(&mut s).map(|x| eval(x)), Some(6));
-        assert_eq!(
-            expr().parse(&mut source("1-(2+3)")).map(|x| eval(x)),
-            Some(-4)
-        );
-        assert_eq!(
-            expr().parse(&mut source("2*(1+3)")).map(|x| eval(x)),
-            Some(8)
-        );
-        assert_eq!(
-            expr().parse(&mut source("-2*(1+3)")).map(|x| eval(x)),
-            Some(-8)
-        );
-        assert_eq!(
-            expr().parse(&mut source("2 + 3 * 4")).map(|x| eval(x)),
-            Some(14)
-        );
-        assert_eq!(
-            expr().parse(&mut source("100 / 10 / 2")).map(|x| eval(x)),
-            Some(5)
-        );
-        assert_eq!(
-            expr().parse(&mut source("100 / (10 / 2)")).map(|x| eval(x)),
-            Some(20)
-        );
-        assert_eq!(expr().parse(&mut source("-1")).map(|x| eval(x)), Some(-1));
+        struct Case {
+            name: String,
+            src: String,
+            expect: i32,
+        }
+        let cases = vec![
+            Case {
+                name: "simple".to_string(),
+                src: "1+2+3".to_string(),
+                expect: 6,
+            },
+            Case {
+                name: "with ()".to_string(),
+                src: "1-(2+3)".to_string(),
+                expect: -4,
+            },
+            Case {
+                name: "mul".to_string(),
+                src: "2*(2+3)".to_string(),
+                expect: 10,
+            },
+            Case {
+                name: "unary minus".to_string(),
+                src: "-2*(-1+3)".to_string(),
+                expect: -4,
+            },
+            Case {
+                name: "unary minus".to_string(),
+                src: "-2*(-1+3)".to_string(),
+                expect: -4,
+            },
+            Case {
+                name: "spaces".to_string(),
+                src: "2 + 3 * 4".to_string(),
+                expect: 14,
+            },
+            Case {
+                name: "minus".to_string(),
+                src: "2 - 3 * 4".to_string(),
+                expect: -10,
+            },
+            Case {
+                name: "div".to_string(),
+                src: "100 / 10/2".to_string(),
+                expect: 5,
+            },
+            Case {
+                name: "div+paren".to_string(),
+                src: "100 / (10 / 2)".to_string(),
+                expect: 20,
+            },
+        ];
+        for c in cases {
+            assert_eq!(
+                expr()
+                    .parse(&mut source(c.src.as_str()))
+                    .map(|x| eval(x))
+                    .expect(c.name.as_str()),
+                c.expect
+            )
+        }
+
+        let cases = vec!["+", "1+"];
+        for c in cases {
+            let mut s = source(c);
+            let _ = expr().parse(&mut s);
+            assert!(!s.is_finished());
+        }
     }
 
     // パーサコンビネータを使った数式構文解析
+    #[derive(Debug, PartialEq)]
     enum Expr {
         Const(i32),
         Add(Box<Expr>, Box<Expr>),
@@ -501,11 +513,10 @@ mod tests {
     fn expr() -> Parser<Expr> {
         // 1+2+3
         // number ( [+|-] number )*
-        term()
-            .apply(|x| (Op::Add, x))
+        apply(term(), |x| (Op::Add, x))
             .then(many(or(
-                char1('+').next(term()).apply(|x| (Op::Add, x)),
-                char1('-').next(term()).apply(|x| (Op::Sub, x)),
+                apply(char1('+').next(term()), |x| (Op::Add, x)),
+                apply(char1('-').next(term()), |x| (Op::Sub, x)),
             )))
             .apply(|ts| {
                 let mut ret = Expr::Const(0);
@@ -521,11 +532,10 @@ mod tests {
     }
 
     fn term() -> Parser<Expr> {
-        factor()
-            .apply(|x| (Op::Mul, x))
+        apply(factor(), |x| (Op::Mul, x))
             .then(many(or(
-                char1('*').next(factor()).apply(|x| (Op::Mul, x)),
-                char1('/').next(factor()).apply(|x| (Op::Div, x)),
+                apply(char1('*').next(factor()), |x| (Op::Mul, x)),
+                apply(char1('/').next(factor()), |x| (Op::Div, x)),
             )))
             .apply(|ts| {
                 let mut ret = Expr::Const(1);
@@ -541,23 +551,16 @@ mod tests {
     }
 
     fn factor() -> Parser<Expr> {
+        let expr = lazy(|| expr());
         spaces()
-            .next(or(
-                char1('(').next(lazy(|| expr())).prev(char1(')')),
-                num_expr(),
-            ))
+            .next(or(char1('(').next(expr).prev(char1(')')), num_expr()))
             .prev(spaces())
     }
 
     fn num_expr() -> Parser<Expr> {
         or(
-            int().apply(|n: i32| Expr::Const(n)),
-            char1('-').next(int().apply(|n: i32| Expr::Const(-n))),
+            int().apply(|n| Expr::Const(n)),
+            char1('-').next(int()).apply(|n: i32| Expr::Const(-n)),
         )
-    }
-
-    #[test]
-    fn test_sandbox() {
-        sandbox();
     }
 }

@@ -1,6 +1,10 @@
 
-all: test
+all: lint test
 
 
 test:
-	RUST_BACKTRACE=1 cargo test
+	cargo test
+
+lint:
+	cargo clean
+	cargo clippy
