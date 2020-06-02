@@ -206,14 +206,7 @@ pub fn satisfy<F>(f: F) -> Parser<char>
 where
     F: Fn(&char) -> bool + 'static,
 {
-    parser(move |s| {
-        s.peek()
-            .filter(|x| f(x))
-            .map_or(Err(ParseError::Unknown), |x| {
-                s.ahead();
-                Ok(x)
-            })
-    })
+    parser(move |s| s.pop().filter(|x| f(x)).ok_or(ParseError::Unknown)).tryp()
 }
 
 pub fn any_char() -> Parser<char> {
@@ -476,12 +469,7 @@ mod tests {
             )
         }
 
-        let cases = vec![
-            "+",
-            "1+",
-            "a+b",
-            "1+(2+3",
-        ];
+        let cases = vec!["+", "1+", "a+b", "1+(2+3"];
         for c in cases {
             let mut s = source(c);
             let _ = expr().parse(&mut s);
@@ -536,7 +524,8 @@ mod tests {
             .apply(|ts| {
                 //構文木を作る
                 // "1+2-3" はS式で書くと (- (+ (+ 1 0) 2) 3)  のような構文木になる
-                ts.into_iter().fold(Expr::Zero, |acc, t| Expr::bin(t.0, acc, t.1))
+                ts.into_iter()
+                    .fold(Expr::Zero, |acc, t| Expr::bin(t.0, acc, t.1))
             })
     }
 
@@ -552,7 +541,8 @@ mod tests {
             .apply(|ts| {
                 //構文木を作る
                 // "2*3/4" はS式で書くと (/ (* (* 2 1) 3) 4)  のような構文木になる
-                ts.into_iter().fold(Expr::One, |acc, t| Expr::bin(t.0, acc, t.1))
+                ts.into_iter()
+                    .fold(Expr::One, |acc, t| Expr::bin(t.0, acc, t.1))
             })
     }
 
