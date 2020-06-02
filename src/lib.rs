@@ -487,12 +487,10 @@ mod tests {
     #[derive(Debug, PartialEq)]
     enum Expr {
         Const(i32),
-        Add(Box<Expr>, Box<Expr>),
-        Sub(Box<Expr>, Box<Expr>),
-        Mul(Box<Expr>, Box<Expr>),
-        Div(Box<Expr>, Box<Expr>),
+        BinOp(Op, Box<Expr>, Box<Expr>),
     }
 
+    #[derive(Debug, PartialEq)]
     enum Op {
         Add,
         Sub,
@@ -503,10 +501,12 @@ mod tests {
     fn eval(exp: Expr) -> i32 {
         match exp {
             Expr::Const(n) => n,
-            Expr::Add(a, b) => eval(*a) + eval(*b),
-            Expr::Sub(a, b) => eval(*a) - eval(*b),
-            Expr::Mul(a, b) => eval(*a) * eval(*b),
-            Expr::Div(a, b) => eval(*a) / eval(*b),
+            Expr::BinOp(op, a, b) => match op {
+                Op::Add => eval(*a) + eval(*b),
+                Op::Sub => eval(*a) - eval(*b),
+                Op::Mul => eval(*a) * eval(*b),
+                Op::Div => eval(*a) / eval(*b),
+            },
         }
     }
 
@@ -519,15 +519,9 @@ mod tests {
                 apply(char1('-').next(term()), |x| (Op::Sub, x)),
             )))
             .apply(|ts| {
-                let mut ret = Expr::Const(0);
-                for t in ts {
-                    ret = match t.0 {
-                        Op::Add => Expr::Add(Box::new(ret), Box::new(t.1)),
-                        Op::Sub => Expr::Sub(Box::new(ret), Box::new(t.1)),
-                        _ => ret,
-                    }
-                }
-                ret
+                ts.into_iter().fold(Expr::Const(0), |acc, t| {
+                    Expr::BinOp(t.0, Box::new(acc), Box::new(t.1))
+                })
             })
     }
 
@@ -538,15 +532,9 @@ mod tests {
                 apply(char1('/').next(factor()), |x| (Op::Div, x)),
             )))
             .apply(|ts| {
-                let mut ret = Expr::Const(1);
-                for t in ts {
-                    ret = match t.0 {
-                        Op::Mul => Expr::Mul(Box::new(ret), Box::new(t.1)),
-                        Op::Div => Expr::Div(Box::new(ret), Box::new(t.1)),
-                        _ => ret,
-                    }
-                }
-                ret
+                ts.into_iter().fold(Expr::Const(1), |acc, t| {
+                    Expr::BinOp(t.0, Box::new(acc), Box::new(t.1))
+                })
             })
     }
 
